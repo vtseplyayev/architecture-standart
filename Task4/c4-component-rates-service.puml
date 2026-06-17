@@ -1,0 +1,39 @@
+@startuml c4-component-rates-service
+' C4 Level 3 — Components. Детализация Сервиса ставок
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+title Диаграмма компонентов (C4 L3) — Сервис ставок
+
+AddRelTag("async", $lineStyle = DashedLine())
+AddRelTag("file", $lineStyle = DashedLine(), $lineColor = "#B07000", $textColor = "#B07000")
+
+' ===== Соседние системы/контейнеры =====
+System_Ext(abs, "АБС (модуль ставок)", "Источник изменений ставок")
+ContainerQueue_Ext(kafka, "Kafka", "Брокер", "Топик изменений ставок")
+System_Ext(crm, "CRM кол-центра банка", "Потребитель API")
+System_Ext(partner_cc, "Партнёрский кол-центр", "Внешняя ИС, приём по SFTP")
+
+Container_Boundary(rates_svc, "Сервис ставок") {
+  Component(consumer, "Rates Consumer", "Kafka consumer", "Принимает события изменения ставок из Kafka, обновляет хранилище (UC1)")
+  ComponentDb(store, "Хранилище актуальных ставок", "MS SQL", "Текущие и персональные ставки с отметкой времени")
+  Component(api, "Rates API", "REST/HTTPS", "Отдаёт актуальные ставки внутреннему кол-центру (UC2)")
+  Component(exporter, "File Export Generator", "Сервис", "Формирует файл ставок (CSV + манифест/checksum) по расписанию и при изменении (UC3)")
+  Component(scheduler, "Scheduler", "Планировщик", "Триггерит регулярную выгрузку (SLA свежести, NFR4)")
+  Component(sftp, "SFTP Connector", "SFTP-клиент", "Доставляет файл во внешнюю систему партнёра по SFTP (NFR5)")
+}
+
+' ===== Связи =====
+Rel(abs, kafka, "Публикует изменения ставок", "Kafka", $tags = "async")
+Rel(kafka, consumer, "Доставляет события", "Kafka", $tags = "async")
+Rel(consumer, store, "Обновляет ставки", "SQL")
+
+Rel(crm, api, "GET актуальные ставки (UC2)", "REST/HTTPS")
+Rel(api, store, "Читает ставки", "SQL")
+
+Rel(scheduler, exporter, "Запуск выгрузки по расписанию")
+Rel(exporter, store, "Читает актуальные ставки", "SQL")
+Rel(exporter, sftp, "Передаёт сформированный файл")
+Rel(sftp, partner_cc, "Доставляет файл актуальных ставок (UC3)", "SFTP", $tags = "file")
+
+SHOW_LEGEND()
+@enduml
