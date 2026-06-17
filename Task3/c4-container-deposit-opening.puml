@@ -1,0 +1,79 @@
+@startuml c4-container-deposit-opening
+' C4 Level 2 — Containers. Открытие депозитов онлайн (MVP)
+' Детализированы Интернет-банк и АБС. Диаграмма покрывает Use Cases UC1..UC7.
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+title Диаграмма контейнеров (C4 L2) — Открытие депозитов онлайн (MVP)
+
+AddRelTag("async", $lineStyle = DashedLine())
+
+' ===== Действующие лица =====
+Person(new_client, "Новый клиент", "Заявка на депозит на сайте")
+Person(client, "Действующий клиент", "Заявка на депозит в ИБ")
+Person(cc_mgr, "Менеджер кол-центра")
+Person(bo_dep, "Менеджер бэк-офиса депозитов")
+Person(bo_cred, "Сотрудник бэк-офиса кредитов")
+
+' ===== Внешние / соседние системы =====
+System_Ext(site, "Публичный сайт", "Витрина ставок + форма заявки")
+System_Ext(crm, "Система кол-центра (CRM)", "Обработка обращений")
+System_Ext(sms_gw, "СМС-шлюз", "Внешний провайдер SMS")
+System_Ext(cb, "ЦБ РФ", "Ставка рефинансирования")
+
+' ===== Брокер сообщений (общая платформа) =====
+System_Boundary(platform, "Интеграционная платформа") {
+  ContainerQueue(kafka, "Kafka", "Брокер сообщений", "Асинхронная развязка ИБ↔АБС, буфер заявок и событий (NFR3, NFR4, NFR11)")
+}
+
+' ===== Интернет-банк (детализация) =====
+System_Boundary(ib, "Интернет-банк") {
+  Container(web, "Web-приложение ИБ (SPA)", "JS, корп. дизайн-система", "UI просмотра ставок и подачи заявки; TLS (NFR6, NFR12)")
+  Container(gw, "API Gateway / BFF", "Reverse proxy", "Единая точка входа, терминирование TLS, аутентификация")
+  Container(deposit_svc, "Сервис депозитных заявок", "Микросервис (.NET/Java)", "Приём/валидация заявки, оркестрация, идемпотентность (NFR8)")
+  Container(rates_cache, "Витрина/кэш ставок (read-model)", "In-memory/реплика", "Актуальные и персональные ставки для мс-отклика (NFR5)")
+  Container(sms_svc, "СМС-сервис", "Микросервис, силами банка", "Коды подтверждения и уведомления (NFR7)")
+  ContainerDb(deposit_db, "БД депозитных заявок", "MS SQL", "Заявки и их статусы (NFR10)")
+}
+
+' ===== АБС (детализация) =====
+System_Boundary(abs, "АБС") {
+  Container(abs_core, "Ядро АБС", "Учётное ядро", "Открытие и ведение депозита; СМС-транспорт ядра не дорабатываем (NFR7)")
+  Container(rates_module, "Модуль ведения и согласования ставок", "Модуль АБС", "Заменяет XLS; разграниченный доступ депозиты/кредиты (UC7)")
+  Container(abs_adapter, "Интеграционный адаптер АБС", "Kafka-коннектор", "Консьюмит заявки, публикует ставки и события")
+  ContainerDb(abs_db, "БД АБС", "Oracle", "Перегружена; только вертикальное масштабирование (NFR9)")
+}
+
+' ===== Связи =====
+' UC1-UC2: новый клиент через сайт и кол-центр
+Rel(new_client, site, "Смотрит ставки, оставляет заявку", "HTTPS/TLS")
+Rel(site, crm, "Создаёт заявку нового клиента", "HTTPS/REST")
+Rel(cc_mgr, crm, "Обрабатывает заявку, звонит клиенту")
+
+' UC3-UC4: действующий клиент в ИБ
+Rel(client, web, "Работает с депозитами", "HTTPS/TLS")
+Rel(web, gw, "Запросы API", "HTTPS/JSON")
+Rel(gw, rates_cache, "Читает ставки/витрину (UC3)", "JSON/мс")
+Rel(gw, deposit_svc, "Отправляет заявку (UC4)", "JSON")
+Rel(deposit_svc, sms_svc, "Запрос кода подтверждения (UC4)", "JSON")
+Rel(sms_svc, sms_gw, "Отправка SMS", "SMPP/HTTPS")
+Rel(sms_gw, client, "СМС: код и уведомления", "SMS")
+Rel(deposit_svc, deposit_db, "Сохраняет заявку/статус", "SQL")
+Rel(deposit_svc, kafka, "Публикует 'Заявка на депозит' (UC4)", "Kafka, async", $tags = "async")
+
+' UC5: бэк-офис согласует и открывает депозит
+Rel(kafka, abs_adapter, "Доставляет заявки", "Kafka, async", $tags = "async")
+Rel(abs_adapter, abs_core, "Создаёт задачу на согласование/открытие")
+Rel(bo_dep, rates_module, "Согласует ставку (UC5)", "UI")
+Rel(bo_dep, abs_core, "Подтверждает условия, открывает депозит (UC5)", "UI")
+Rel(bo_cred, rates_module, "Ведёт ставки/риск, разграниченный доступ (UC7)", "UI")
+Rel(abs_core, abs_db, "Чтение/запись", "SQL")
+Rel(rates_module, abs_db, "Чтение/запись ставок", "SQL")
+Rel(cb, rates_module, "Ставка рефинансирования", "Внешние данные")
+
+' UC6: события и уведомления; обновление витрины ставок
+Rel(abs_adapter, kafka, "Публикует события 'Ставка подтверждена', 'Депозит открыт', обновления ставок", "Kafka, async", $tags = "async")
+Rel(kafka, sms_svc, "События для уведомлений (UC6)", "Kafka, async", $tags = "async")
+Rel(kafka, rates_cache, "Обновляет read-model ставок (NFR5)", "Kafka, async", $tags = "async")
+
+SHOW_LEGEND()
+@enduml

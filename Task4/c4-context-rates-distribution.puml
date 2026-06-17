@@ -1,0 +1,32 @@
+@startuml c4-context-rates-distribution
+' C4 Level 1 — System Context. Передача актуальных ставок в кол-центры
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Context.puml
+
+title Диаграмма контекста (C4 L1) — Передача ставок в кол-центр банка и партнёра
+
+AddRelTag("async", $lineStyle = DashedLine())
+AddRelTag("file", $lineStyle = DashedLine(), $lineColor = "#B07000", $textColor = "#B07000")
+
+' ===== Действующие лица =====
+Person(client, "Клиент", "Звонит уточнить условия по депозитам")
+Person(cc_op, "Оператор кол-центра банка", "Консультирует по актуальным ставкам")
+Person(partner_op, "Оператор партнёрского кол-центра", "Консультирует по актуальным ставкам")
+
+' ===== Системы =====
+System(abs, "АБС", "Источник ставок: модуль ведения и согласования ставок (Задание 3)")
+System(rates_svc, "Сервис ставок", "Хранит актуальные ставки, отдаёт по API и выгружает файлами")
+System(crm, "Система кол-центра банка (CRM)", "Рабочее место оператора банка")
+System_Ext(partner_cc, "Партнёрский кол-центр", "Внешняя ИС; принимает ставки только файлами по SFTP")
+
+' ===== Связи =====
+Rel(abs, rates_svc, "Публикует изменения ставок", "Kafka, async", $tags = "async")
+Rel(crm, rates_svc, "Запрашивает актуальные ставки (UC2)", "REST/HTTPS")
+Rel(rates_svc, partner_cc, "Выгружает файл актуальных ставок (UC3)", "SFTP, файл", $tags = "file")
+
+Rel(client, cc_op, "Звонит (UC2)", "Телефон")
+Rel(client, partner_op, "Звонит при перегрузке (UC4)", "Телефон")
+Rel(cc_op, crm, "Смотрит ставки")
+Rel(partner_op, partner_cc, "Смотрит ставки из файла")
+
+SHOW_LEGEND()
+@enduml
